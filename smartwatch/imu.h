@@ -34,8 +34,8 @@
 #define LSM_INT1_CTRL_EMB       0x0A  // route step to INT1
 
 // ── Sample format ────────────────────────────────────────────
-// Raw int16 counts. At ±4g accel: 1 g ≈ 8192 counts.
-//                  At ±250 dps gyro: 1 dps ≈ 131 counts.
+// Raw int16 counts. At ±2g accel: 1 g ≈ 16384 counts.
+//                  At ±250 dps gyro: 1 dps ≈ 114.3 counts.
 typedef struct {
   int16_t gx, gy, gz;
   int16_t ax, ay, az;
@@ -85,15 +85,22 @@ void imu_init(int int1_pin, int int2_pin) {
     Serial.println("[IMU] LSM6DSO32 found.");
   }
 
-  // Reset device (CTRL3_C: BOOT=0, BDU=1, IF_INC=1, SW_RESET=1)
-  lsm_write(LSM_CTRL3_C, 0x45);
+  // Software reset (SW_RESET=1). The reset clears every CTRL register
+  // back to defaults — BDU and IF_INC included — so we re-program
+  // CTRL3_C explicitly *after* the reset settles.
+  lsm_write(LSM_CTRL3_C, 0x01);
   delay(20);
 
-  // Accel: 52 Hz, ±4g — fast enough for HAR windows (2 s = 104 samples)
-  // CTRL1_XL: ODR_XL=0011 (52Hz), FS_XL=00 (±4g on DSO32)
+  // CTRL3_C: BDU=1 (block data update — prevents torn multi-byte reads),
+  //          IF_INC=1 (auto-increment for burst reads).
+  lsm_write(LSM_CTRL3_C, 0x44);
+
+  // Accel: 52 Hz, ±2g (the populated part is LSM6DSO, not DSO32 —
+  // they share WHO_AM_I=0x6C but FS_XL=00 maps to ±2g on DSO).
+  // CTRL1_XL: ODR_XL=0011 (52Hz), FS_XL=00 (±2g on DSO)
   lsm_write(LSM_CTRL1_XL, 0x30);
 
-  // Gyro: 52 Hz, ±250 dps — wrist rotation rarely exceeds 250 dps
+  // Gyro: 52 Hz, ±250 dps — wrist rotation rarely exceeds 250 dps.
   // CTRL2_G: ODR_G=0011 (52Hz), FS_G=00 (±250 dps)
   lsm_write(LSM_CTRL2_G, 0x30);
 

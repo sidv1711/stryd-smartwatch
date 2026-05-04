@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"find /Users/siddh/Documents/stryd/hope_firmware/.omc -type f 2>/dev/null; ls -la /Users/siddh/Documents/stryd/hope_firmware/.omc/state/ 2>/dev/null; ls -la /Users/siddh/Documents/stryd/hop...",
+  "error": "Exit code 1\n/Users/siddh/Documents/stryd/hope_firmware/.omc/project-memory.json\n/Users/siddh/Documents/stryd/hope_firmware/.omc/state/hud-stdin-cache.json\n/Users/siddh/Documents/stryd/hope_firmware/.omc/state/hud-state.json\n/Users/siddh/Documents/stryd/hope_firmware/.omc/sessions/4927899c-c7bd-40e9-9eba-2d4b8a96f0e2.json\ntotal 16\ndrwxr-xr-x@ 4 siddh  staff   128 May  3 19:02 .\ndrwxr-xr-x@ 5 siddh  staff   160 May  3 19:02 ..\n-rw-------@ 1 siddh  staff   180 May  3 18:30 hud-state.json\n-rw-r--r--...",
+  "timestamp": "2026-05-04T02:02:49.041Z",
+  "retry_count": 1
+}
