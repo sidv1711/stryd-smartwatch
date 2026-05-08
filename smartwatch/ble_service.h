@@ -62,6 +62,9 @@ static bool               _time_set         = false;
 // Seconds elapsed since last time sync (for local tick)
 static unsigned long      _time_sync_millis = 0;
 static uint8_t            _synced_h = 0, _synced_m = 0, _synced_s = 0;
+static uint16_t           _synced_year  = 0;
+static uint8_t            _synced_month = 0;
+static uint8_t            _synced_day   = 0;
 
 // ─────────────────────────────────────────────────────────────
 class BleServerCallbacks : public BLEServerCallbacks {
@@ -81,13 +84,17 @@ class TimeWriteCallback : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic* c) override {
     std::string val = c->getValue().c_str();
     if (val.size() >= 7) {
-      // Encode: year_hi, year_lo, month, day, hour, minute, second
-      _synced_h = (uint8_t)val[4];
-      _synced_m = (uint8_t)val[5];
-      _synced_s = (uint8_t)val[6];
+      // Payload: year_hi, year_lo, month, day, hour, minute, second
+      _synced_year  = ((uint8_t)val[0] << 8) | (uint8_t)val[1];
+      _synced_month = (uint8_t)val[2];
+      _synced_day   = (uint8_t)val[3];
+      _synced_h     = (uint8_t)val[4];
+      _synced_m     = (uint8_t)val[5];
+      _synced_s     = (uint8_t)val[6];
       _time_sync_millis = millis();
       _time_set = true;
-      Serial.printf("[BLE] Time synced: %02d:%02d:%02d\n",
+      Serial.printf("[BLE] Time synced: %04d-%02d-%02d %02d:%02d:%02d\n",
+                    _synced_year, _synced_month, _synced_day,
                     _synced_h, _synced_m, _synced_s);
     }
   }
@@ -190,6 +197,9 @@ void ble_tick_time(WatchState& ws) {
   ws.hour   = total_s / 3600;
   ws.minute = (total_s % 3600) / 60;
   ws.second = total_s % 60;
+  ws.year   = _synced_year;
+  ws.month  = _synced_month;
+  ws.day    = _synced_day;
 }
 
 // ─────────────────────────────────────────────────────────────

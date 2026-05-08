@@ -1,31 +1,23 @@
 /*
- * watchface_impl.h  –  Watch face rendering for GC9A01 240×240 round display
+ * watchface_impl.h  –  3-screen watch face for GC9A01 240×240 round display
  *
- * Layout:
+ * Screen 0  Clock       : large time, date, BLE/charge status
+ * Screen 1  Health      : step count, progress bar toward 10 000 goal, skin temp
+ * Screen 2  Environment : outdoor weather + temp, pressure, altitude
  *
- *           ╭──────────────────────╮
- *           │      12:34:56        │  ← large digital time (center)
- *           │   ──────────────     │
- *           │  👟 8,432 steps      │  ← steps
- *           │  🌡 36.7°C  skin    │  ← skin temp
- *           │  📊 1013 hPa         │  ← pressure
- *           │  ⬆ 142 m alt        │  ← altitude
- *           │  ─────────────       │
- *           │  ☁ 18°C  Cloudy     │  ← weather (from phone)
- *           │  ⚡ BLE  🔋chg      │  ← status bar
- *           ╰──────────────────────╯
- *
- * Fonts: Adafruit GFX built-in + optional custom fonts in fonts/
+ * Navigation: CST816S swipe-left → next screen, swipe-right → previous screen.
+ * Dot indicators at y=214 show the active screen.
  *
  * Color palette (RGB565):
  *   Background  0x0000  black
- *   Time        0xFFFF  white
+ *   Time/text   0xFFFF  white
  *   Steps       0x07FF  cyan
- *   Temp        0xFD60  orange
+ *   Skin temp   0xFD60  orange
  *   Pressure    0x7BEF  light grey
- *   Altitude    0x3666  teal
+ *   Altitude    0x2795  teal
  *   Weather     0xAFFF  sky blue
- *   Status      0x07E0  green / 0xF800 red
+ *   Green       0x07E0  / Red 0xF800
+ *   Dim         0x39E7  dark grey
  */
 
 #pragma once
@@ -46,130 +38,253 @@
 #define C_RED       0xF800
 #define C_DIM       0x39E7
 
-// ── Display object ────────────────────────────────────────────
-// Defined exactly once, in smartwatch.ino. Declared extern in display.h
-// so any TU that includes display.h (or this header) can use `tft`.
-// Defining it here would cause multiple-definition linker errors as
-// soon as a second .cpp/.ino includes this header.
+// ── Display geometry ──────────────────────────────────────────
+#define DISP_W       240
+#define DISP_H       240
+#define CX           (DISP_W / 2)
+#define CY           (DISP_H / 2)
 
-// Display dimensions
-#define DISP_W  240
-#define DISP_H  240
-#define CX      (DISP_W / 2)
-#define CY      (DISP_H / 2)
+#define SCREEN_COUNT 3
+#define STEP_GOAL    10000UL
 
-// ─────────────────────────────────────────────────────────────
-// Helper: print centered text
+// ── Low-level helpers ─────────────────────────────────────────
+
 static void draw_centered(const char* text, int y, uint16_t color, uint8_t size) {
-  tft.setTextColor(color, C_BG);
-  tft.setTextSize(size);
-  int16_t x1, y1; uint16_t w, h;
-  tft.getTextBounds(text, 0, y, &x1, &y1, &w, &h);
-  tft.setCursor((DISP_W - w) / 2, y);
-  tft.print(text);
+    tft.setTextColor(color, C_BG);
+    tft.setTextSize(size);
+    int16_t x1, y1; uint16_t w, h;
+    tft.getTextBounds(text, 0, y, &x1, &y1, &w, &h);
+    tft.setCursor((DISP_W - w) / 2, y);
+    tft.print(text);
 }
 
-// Helper: draw a horizontal divider
 static void draw_divider(int y, uint16_t color) {
-  tft.drawFastHLine(40, y, 160, color);
+    tft.drawFastHLine(40, y, 160, color);
 }
 
-// Helper: left-aligned row with label + value
 static void draw_row(int y, const char* label, const char* value,
                      uint16_t label_color, uint16_t val_color) {
-  // Clear row
-  tft.fillRect(20, y, 200, 18, C_BG);
-
-  tft.setTextSize(1);
-  tft.setTextColor(label_color, C_BG);
-  tft.setCursor(20, y);
-  tft.print(label);
-
-  tft.setTextColor(val_color, C_BG);
-  // right-align value
-  int16_t x1, y1; uint16_t w, h;
-  tft.getTextBounds(value, 0, y, &x1, &y1, &w, &h);
-  tft.setCursor(220 - w, y);
-  tft.print(value);
+    tft.fillRect(20, y, 200, 18, C_BG);
+    tft.setTextSize(1);
+    tft.setTextColor(label_color, C_BG);
+    tft.setCursor(20, y);
+    tft.print(label);
+    int16_t x1, y1; uint16_t w, h;
+    tft.getTextBounds(value, 0, y, &x1, &y1, &w, &h);
+    tft.setTextColor(val_color, C_BG);
+    tft.setCursor(220 - w, y);
+    tft.print(value);
 }
 
-// ─────────────────────────────────────────────────────────────
+// Three dots at bottom; active dot is filled white, others are dim outlines
+static void draw_dots(uint8_t active) {
+    const int y  = 214;
+    const int r  = 4;
+    const int sp = 14;              // spacing between dot centres
+    const int x0 = CX - sp;        // leftmost dot
+
+    for (int i = 0; i < SCREEN_COUNT; i++) {
+        int x = x0 + i * sp;
+        tft.fillCircle(x, y, r + 1, C_BG);     // clear
+        if (i == (int)active) {
+            tft.fillCircle(x, y, r, C_TIME);
+        } else {
+            tft.drawCircle(x, y, r, C_DIM);
+        }
+    }
+}
+
+static void draw_progress_bar(int x, int y, int w, int h,
+                               float progress, uint16_t fill_color) {
+    if (progress < 0.0f) progress = 0.0f;
+    if (progress > 1.0f) progress = 1.0f;
+    int inner_w = w - 2;
+    int filled  = (int)(progress * inner_w);
+    tft.fillRect(x, y, w, h, C_BG);
+    tft.drawRect(x, y, w, h, C_DIM);
+    if (filled > 0) tft.fillRect(x + 1, y + 1, filled, h - 2, fill_color);
+}
+
+// ── Data helpers ──────────────────────────────────────────────
+
 static const char* weather_description(uint8_t code) {
-  // WMO weather interpretation codes (subset)
-  if (code == 0)               return "Clear";
-  if (code <= 3)               return "Partly Cloudy";
-  if (code <= 19)              return "Foggy";
-  if (code <= 29)              return "Drizzle";
-  if (code <= 39)              return "Dust/Smoke";
-  if (code <= 49)              return "Fog";
-  if (code <= 59)              return "Drizzle";
-  if (code <= 69)              return "Rain";
-  if (code <= 79)              return "Snow";
-  if (code <= 84)              return "Showers";
-  if (code <= 94)              return "Thunderstorm";
-  return "Unknown";
+    if (code == 0)  return "Clear";
+    if (code <= 3)  return "Partly Cloudy";
+    if (code <= 19) return "Foggy";
+    if (code <= 29) return "Drizzle";
+    if (code <= 39) return "Dust/Smoke";
+    if (code <= 49) return "Fog";
+    if (code <= 59) return "Drizzle";
+    if (code <= 69) return "Rain";
+    if (code <= 79) return "Snow";
+    if (code <= 84) return "Showers";
+    if (code <= 94) return "Thunderstorm";
+    return "Unknown";
+}
+
+// Tomohiko Sakamoto's algorithm; returns 0=Sun … 6=Sat
+static int day_of_week(int y, int m, int d) {
+    static const int t[] = {0,3,2,5,0,3,5,1,4,6,2,4};
+    if (m < 3) y--;
+    return (y + y/4 - y/100 + y/400 + t[m-1] + d) % 7;
+}
+
+// Format uint32 steps with thousands comma (e.g. "8,432")
+static void fmt_steps(char* buf, size_t len, uint32_t s) {
+    if (s >= 1000) {
+        snprintf(buf, len, "%lu,%03lu",
+                 (unsigned long)(s / 1000), (unsigned long)(s % 1000));
+    } else {
+        snprintf(buf, len, "%lu", (unsigned long)s);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────
+// Screen 0 – Clock
+// Layout (240×240):
+//   y= 75  HH:MM  size-4 white
+//   y=120  Day DD Mon  size-2 dim
+//   y=176  BLE / CHG  size-2
+//   y=214  dot indicators
+static void draw_screen0(const WatchState& ws) {
+    char buf[32];
+
+    // Time
+    tft.fillRect(18, 68, 204, 42, C_BG);
+    snprintf(buf, sizeof(buf), "%02d:%02d", ws.hour, ws.minute);
+    draw_centered(buf, 75, C_TIME, 4);
+
+    // Date
+    tft.fillRect(30, 112, 180, 22, C_BG);
+    if (ws.year > 0 && ws.month >= 1 && ws.month <= 12 && ws.day >= 1) {
+        static const char* mn[] = {
+            "Jan","Feb","Mar","Apr","May","Jun",
+            "Jul","Aug","Sep","Oct","Nov","Dec"
+        };
+        static const char* dn[] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
+        int dow = day_of_week(ws.year, ws.month, ws.day);
+        snprintf(buf, sizeof(buf), "%s %d %s %d",
+                 dn[dow], ws.day, mn[ws.month - 1], ws.year);
+    } else {
+        snprintf(buf, sizeof(buf), "--");
+    }
+    draw_centered(buf, 118, C_DIM, 1);
+
+    // BLE + charge status
+    tft.fillRect(50, 169, 140, 22, C_BG);
+    tft.setTextSize(2);
+    tft.setTextColor(ws.bleConnected ? C_GREEN : C_RED, C_BG);
+    tft.setCursor(56, 176);
+    tft.print(ws.bleConnected ? "BLE" : "BLE?");
+    tft.setTextColor(ws.charging ? C_GREEN : C_DIM, C_BG);
+    tft.setCursor(128, 176);
+    tft.print(ws.charging ? "CHG" : "BAT");
+}
+
+// ─────────────────────────────────────────────────────────────
+// Screen 1 – Health
+// Layout:
+//   y= 60  "STEPS" label  size-1 dim
+//   y= 78  step count     size-4 cyan
+//   y=128  progress bar   160×14
+//   y=147  "N / 10,000"   size-1 dim
+//   y=168  "SKIN TEMP"    size-1 dim
+//   y=182  temperature    size-2 orange
+//   y=214  dots
+static void draw_screen1(const WatchState& ws) {
+    char buf[32];
+
+    // Label
+    tft.fillRect(20, 55, 200, 14, C_BG);
+    draw_centered("STEPS", 58, C_DIM, 1);
+
+    // Step count
+    tft.fillRect(18, 72, 204, 42, C_BG);
+    fmt_steps(buf, sizeof(buf), ws.steps);
+    draw_centered(buf, 78, C_STEPS, 4);
+
+    // Progress bar toward daily goal
+    float progress = (float)ws.steps / (float)STEP_GOAL;
+    draw_progress_bar(40, 128, 160, 14, progress, C_STEPS);
+
+    // Goal fraction text
+    tft.fillRect(20, 145, 200, 14, C_BG);
+    char sbuf[16];
+    fmt_steps(sbuf, sizeof(sbuf), ws.steps);
+    snprintf(buf, sizeof(buf), "%s / 10,000", sbuf);
+    draw_centered(buf, 147, C_DIM, 1);
+
+    // Skin temperature
+    tft.fillRect(20, 162, 200, 14, C_BG);
+    draw_centered("SKIN TEMP", 164, C_DIM, 1);
+    tft.fillRect(20, 178, 200, 22, C_BG);
+    snprintf(buf, sizeof(buf), "%.1f C", ws.temperature);
+    draw_centered(buf, 182, C_TEMP, 2);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Screen 2 – Environment
+// Layout:
+//   y= 65  weather description  size-2 sky-blue
+//   y= 93  outdoor temp         size-4 sky-blue
+//   y=138  divider
+//   y=150  pressure row         size-1
+//   y=170  altitude row         size-1
+//   y=214  dots
+static void draw_screen2(const WatchState& ws) {
+    char buf[32];
+
+    // Weather description
+    tft.fillRect(20, 58, 200, 22, C_BG);
+    draw_centered(weather_description(ws.weatherCode), 64, C_WEATHER, 2);
+
+    // Outdoor temperature (large)
+    tft.fillRect(18, 85, 204, 42, C_BG);
+    snprintf(buf, sizeof(buf), "%.0f C", ws.weatherTemp);
+    draw_centered(buf, 92, C_WEATHER, 4);
+
+    draw_divider(138, C_DIM);
+
+    // Pressure
+    snprintf(buf, sizeof(buf), "%.0f hPa", ws.pressure);
+    draw_row(150, "PRESSURE", buf, C_DIM, C_PRESSURE);
+
+    // Altitude
+    snprintf(buf, sizeof(buf), "%.0f m", ws.altitude);
+    draw_row(170, "ALTITUDE", buf, C_DIM, C_ALTITUDE);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Public API
+// ─────────────────────────────────────────────────────────────
+
+// Called once at boot to blank the display and draw the bezel ring.
 void watchface_draw_initial() {
-  tft.fillScreen(C_BG);
-  // Draw decorative ring
-  tft.drawCircle(CX, CY, 118, C_DIM);
-  tft.drawCircle(CX, CY, 116, 0x18C3);
+    tft.fillScreen(C_BG);
+    tft.drawCircle(CX, CY, 118, C_DIM);
+    tft.drawCircle(CX, CY, 116, 0x18C3);
 }
 
-// ─────────────────────────────────────────────────────────────
-void watchface_update(const WatchState& ws) {
-  char buf[32];
+// Full redraw: clear, ring, dots, then the requested screen.
+// Call whenever the active screen changes.
+void watchface_switch_screen(uint8_t screen, const WatchState& ws) {
+    tft.fillScreen(C_BG);
+    tft.drawCircle(CX, CY, 118, C_DIM);
+    tft.drawCircle(CX, CY, 116, 0x18C3);
+    draw_dots(screen);
+    switch (screen) {
+        case 0: draw_screen0(ws); break;
+        case 1: draw_screen1(ws); break;
+        case 2: draw_screen2(ws); break;
+    }
+}
 
-  // ── Time ────────────────────────────────────────────────
-  tft.fillRect(20, 22, 200, 36, C_BG);
-  snprintf(buf, sizeof(buf), "%02d:%02d:%02d", ws.hour, ws.minute, ws.second);
-  draw_centered(buf, 22, C_TIME, 3);
-
-  draw_divider(62, C_DIM);
-
-  // ── Steps ───────────────────────────────────────────────
-  tft.fillRect(20, 68, 200, 14, C_BG);
-  snprintf(buf, sizeof(buf), "%lu steps", (unsigned long)ws.steps);
-  draw_row(68, "STEPS", buf, C_DIM, C_STEPS);
-
-  // ── Skin Temperature ────────────────────────────────────
-  tft.fillRect(20, 86, 200, 14, C_BG);
-  snprintf(buf, sizeof(buf), "%.1f C skin", ws.temperature);
-  draw_row(86, "TEMP", buf, C_DIM, C_TEMP);
-
-  // ── Pressure ────────────────────────────────────────────
-  tft.fillRect(20, 104, 200, 14, C_BG);
-  snprintf(buf, sizeof(buf), "%.0f hPa", ws.pressure);
-  draw_row(104, "PRESSURE", buf, C_DIM, C_PRESSURE);
-
-  // ── Altitude ────────────────────────────────────────────
-  tft.fillRect(20, 122, 200, 14, C_BG);
-  snprintf(buf, sizeof(buf), "%.0f m", ws.altitude);
-  draw_row(122, "ALTITUDE", buf, C_DIM, C_ALTITUDE);
-
-  draw_divider(140, C_DIM);
-
-  // ── Weather ─────────────────────────────────────────────
-  tft.fillRect(20, 146, 200, 14, C_BG);
-  snprintf(buf, sizeof(buf), "%.0f C  %s", ws.weatherTemp,
-           weather_description(ws.weatherCode));
-  draw_row(146, "WEATHER", buf, C_DIM, C_WEATHER);
-
-  draw_divider(164, C_DIM);
-
-  // ── Status bar ──────────────────────────────────────────
-  tft.fillRect(20, 170, 200, 12, C_BG);
-  tft.setTextSize(1);
-
-  // BLE status
-  tft.setTextColor(ws.bleConnected ? C_GREEN : C_RED, C_BG);
-  tft.setCursor(20, 170);
-  tft.print(ws.bleConnected ? "BLE" : "BLE?");
-
-  // Charging indicator
-  tft.setTextColor(ws.charging ? C_GREEN : C_DIM, C_BG);
-  tft.setCursor(70, 170);
-  tft.print(ws.charging ? "CHG" : "BAT");
+// Partial update: refresh only the data areas of the current screen.
+// Call on every sensor-update tick (no full clear, no dot redraw).
+void watchface_update(uint8_t screen, const WatchState& ws) {
+    switch (screen) {
+        case 0: draw_screen0(ws); break;
+        case 1: draw_screen1(ws); break;
+        case 2: draw_screen2(ws); break;
+    }
 }

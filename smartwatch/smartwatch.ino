@@ -20,6 +20,8 @@
 #define PIN_IMU_INT2   4
 #define PIN_BARO_INT   5
 #define PIN_CHG_STAT   6
+#define PIN_TOUCH_INT  8
+#define PIN_TOUCH_RST  17
 
 #include "watchface.h"       // WatchState struct
 #include "imu.h"             // LSM6DSO32
@@ -28,6 +30,7 @@
 #include "ble_service.h"     // BLE GATT
 #include "display.h"         // declares `extern Adafruit_GC9A01A tft`
 #include "watchface_impl.h"  // watchface drawing (uses tft)
+#include "touch.h"           // CST816S touch controller
 
 // ── Display object ───────────────────────────────────────────
 // One-and-only definition; headers refer to it via `extern`.
@@ -48,6 +51,9 @@ WatchState g_watch;
 unsigned long g_lastSensorRead  = 0;
 unsigned long g_lastDisplayDraw = 0;
 unsigned long g_lastBleNotify   = 0;
+
+uint8_t  g_currentScreen = 0;
+bool     g_screenChanged = true;   // force full draw on first loop
 
 // ─────────────────────────────────────────────────────────────
 // Boot diagnostic: scans I2C bus, samples each sensor, sanity-
@@ -170,7 +176,19 @@ void setup() {
 
   // I2C
   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
+
+  // Temporary I2C scan: verify CST816S touch controller is reachable
+  Wire.beginTransmission(0x15);
+  if (Wire.endTransmission() == 0) {
+    Serial.println("[TOUCH] CST816S found at 0x15!");
+  } else {
+    Serial.println("[TOUCH] CST816S NOT found - check wiring");
+  }
+
   Wire.setClock(400000);
+
+  // Touch controller
+  touch_init(PIN_TOUCH_INT, PIN_TOUCH_RST);
 
   // Sensors
   imu_init(PIN_IMU_INT1, PIN_IMU_INT2);
@@ -200,6 +218,20 @@ void setup() {
 void loop() {
   unsigned long now = millis();
 
+  // ── Touch / screen navigation ────────────────────────────
+  uint8_t gesture = touch_poll();
+  if (gesture == GESTURE_SWIPE_LEFT) {
+    g_currentScreen = (g_currentScreen + 1) % SCREEN_COUNT;
+    g_screenChanged = true;
+  } else if (gesture == GESTURE_SWIPE_RIGHT) {
+    g_currentScreen = (g_currentScreen + SCREEN_COUNT - 1) % SCREEN_COUNT;
+    g_screenChanged = true;
+  }
+  if (g_screenChanged) {
+    g_screenChanged = false;
+    watchface_switch_screen(g_currentScreen, g_watch);
+  }
+
   // Read sensors every 1s
   if (now - g_lastSensorRead >= SENSOR_INTERVAL_MS) {
     g_lastSensorRead = now;
@@ -216,7 +248,7 @@ void loop() {
   // Redraw display every 1s
   if (now - g_lastDisplayDraw >= DISPLAY_INTERVAL_MS) {
     g_lastDisplayDraw = now;
-    watchface_update(g_watch);
+    watchface_update(g_currentScreen, g_watch);
   }
 
   // Notify BLE clients every 5s
