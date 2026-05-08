@@ -12,6 +12,9 @@ struct WatchState {
   uint8_t  hour;
   uint8_t  minute;
   uint8_t  second;
+  uint16_t year;
+  uint8_t  month;         // 1-12
+  uint8_t  day;           // 1-31
 
   // Weather (from phone via BLE)
   uint8_t  weatherCode;   // WMO weather code
