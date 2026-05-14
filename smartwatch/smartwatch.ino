@@ -31,6 +31,7 @@
 #include "display.h"         // declares `extern Adafruit_GC9A01A tft`
 #include "watchface_impl.h"  // watchface drawing (uses tft)
 #include "touch.h"           // CST816S touch controller
+#include "wifi_weather.h"    // WiFi + Open-Meteo weather streaming
 
 // ── Display object ───────────────────────────────────────────
 // One-and-only definition; headers refer to it via `extern`.
@@ -202,6 +203,9 @@ void setup() {
   // BLE
   ble_init();
 
+  // WiFi + weather streaming (non-blocking; fetches every ~10 min once connected)
+  wifi_weather_init();
+
   // Boot diagnostic — runs after every subsystem is initialized so
   // it can exercise sensors and display end-to-end.
   self_test();
@@ -259,4 +263,7 @@ void loop() {
 
   // Process incoming BLE data (time sync, weather)
   ble_process(g_watch);
+
+  // Refresh weather over WiFi (no-op until connected & interval elapsed)
+  wifi_weather_poll(g_watch);
 }
