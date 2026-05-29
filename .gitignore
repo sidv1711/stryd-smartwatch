@@ -1,0 +1,15 @@
+# macOS
+.DS_Store
+
+# Local secrets (WiFi creds, lat/lon)
+smartwatch/secrets.h
+
+# Arduino build output
+build/
+*.hex
+*.elf
+*.bin
+
+# Editors
+.vscode/
+.idea/
