@@ -16,3 +16,10 @@ build/
 # Editors
 .vscode/
 .idea/
+
+# ML training artifacts
+tools/ml/data/
+tools/ml/artifacts/
+tools/ml/venv/
+__pycache__/
+*.pyc
