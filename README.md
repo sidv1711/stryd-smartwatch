@@ -4,7 +4,7 @@
 
 A wrist-worn fitness wearable built from a custom KiCad PCB, an ESP32-S3, a 1.28" round display, and a small zoo of I²C sensors. Final project for the **UC Berkeley HOPE DeCal**.
 
-The watch tracks steps, skin temperature, barometric pressure, altitude, and outdoor weather, and renders everything on a swipeable round display. Weather streams over Wi-Fi from Open-Meteo. On-device human-activity recognition (HAR) is on the roadmap.
+The watch tracks steps, skin temperature, barometric pressure, altitude, and outdoor weather, and renders everything on a swipeable round display. Weather streams over Wi-Fi from Open-Meteo. A small 1-D CNN classifies activity on-device via TensorFlow Lite Micro — currently 5 classes (walking, jogging, stairs, sitting, standing), trained on WISDM at 96 % test accuracy. Expanding to 10 classes plus rep counting, cadence, intensity, sleep detection, and altitude-gain tracking is in progress.
 
 ---
 
@@ -19,6 +19,7 @@ The watch tracks steps, skin temperature, barometric pressure, altitude, and out
 - **Pressure + altitude** from the LPS25HB, altitude derived locally from pressure.
 - **Outdoor weather** — Wi-Fi pulls current temperature + WMO weather code from Open-Meteo every 10 minutes.
 - **BLE GATT server** exposes step / temp / pressure / altitude as notify characteristics; accepts time + weather writes from a paired phone (legacy path — Wi-Fi is now primary for weather).
+- **On-device activity classification** — 1-D CNN (int8, ~20 KB) running under TensorFlow Lite Micro. Reads IMU at 50 Hz, runs inference once per 128-sample (~2.56 s) window. Predicted class + confidence appear on the Activity screen.
 - **Charge-state indicator** wired off the MCP73831's `CHG_STAT` line.
 
 ---
@@ -143,18 +144,45 @@ Lat/long can be grabbed by right-clicking your location in Google Maps.
 
 ---
 
-## ML Training Roadmap
+## Machine Learning
 
-On-device **Human Activity Recognition (HAR)** is the next milestone. The pipeline below is planned, not yet implemented.
+### What's shipped
 
-1. **Data collection.** Stream IMU samples (52 Hz accel + gyro) over BLE to a paired laptop while wearing the watch and performing labelled activities (walking, running, sitting, climbing stairs, idle). Target: ~30 min per class across multiple sessions and wearers.
-2. **Preprocessing.** Window the stream into ~2.5 s segments (128 samples @ 52 Hz) with 50 % overlap. Normalize per-axis. Hold out 20 % for validation, 10 % for test.
-3. **Model.** Lightweight 1-D CNN over the 6-axis IMU window (~10 k parameters target so it fits in flash and runs in <30 ms on the LX7 with vector ops). Train in TensorFlow / Keras.
-4. **Quantization.** Post-training int8 quantization via TFLite. Verify accuracy delta vs. float32 stays under ~2 %.
-5. **Deployment.** Convert to a C array via `xxd -i`, link against **TensorFlow Lite Micro for Espressif**. Run inference every ~2 s in a low-priority FreeRTOS task.
-6. **Surface results.** Add an `activity` field to `WatchState`, render the current activity on a new screen, and notify it over BLE.
+- **5-class on-device classifier** — walking, jogging, stairs, sitting, standing.
+- **Model:** small 1-D CNN over 6-axis IMU windows. Conv16 → Pool → Conv32 → Pool → Conv64 → GAP → Dense. ~10 k parameters; 20 KB after int8 quantization.
+- **Training:** WISDM Smartphone-and-Smartwatch dataset, wrist subset, 50 Hz resampled, 128-sample (~2.56 s) windows with 50 % overlap.
+- **Test accuracy:** 96.05 % (5,213 holdout windows). Per-class F1 ranges 0.94–0.99 — *standing* vs. *sitting* is the only meaningful confusion.
+- **Deployment:** int8 weights baked into `smartwatch/model_data.h`. TensorFlow Lite Micro runs Invoke every 128 samples in `activity_classifier.h`. Predicted class + confidence land in `WatchState` and render on the Activity screen.
 
-Training code, dataset capture scripts, and quantization recipe will live under `tools/ml/` once they exist.
+### Training pipeline (`tools/ml/`)
+
+```bash
+cd tools/ml
+python3 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+python prepare_data.py   # one-time WISDM download + windowing
+python train.py          # train + evaluate + quantize + emit model_data.h
+```
+
+`train.py` outputs `artifacts/model.tflite` (~20 KB) and `artifacts/model_data.h` (the file `activity_classifier.h` includes). Re-running `train.py` after editing the architecture or dataset filter is the entire refresh loop.
+
+### Firmware-side dependency
+
+The activity classifier requires the **TensorFlowLite_ESP32** Arduino library (by `tanakamasayuki`) — install via Library Manager. `Chirale_TensorFlowLite` is an API-compatible alternative if the primary doesn't appear.
+
+### Project goal — full capability target
+
+The classifier is the foundation for the broader fitness-tracking goal:
+
+| Capability | Status |
+|---|---|
+| ~10 activity classes at 85–95 % accuracy | 5 of 10 shipped. Cycling, rowing, push-ups, jumping jacks, sleep need additional data — likely BLE-streamed from the watch and labelled. |
+| Step count, cadence, intensity zones | Step count live via LSM6DSO32 pedometer. Cadence (FFT) and intensity (accel RMS) pending. |
+| Rep counting (push-ups, squats, bicep curls, jumping jacks, sit-ups) | Pending. Peak-detect on the dominant axis after activity classification. |
+| Wake-vs-sleep detection | Pending. Low-motion + posture rule on the same IMU stream. |
+| Altitude gain / loss | Pressure → altitude already in the loop; need delta accumulation over a window. |
+
+Hardware-limited and *not* in scope: heart rate, SpO₂, GPS, pose / form correction, sleep staging.
 
 ---
 
@@ -165,7 +193,7 @@ Training code, dataset capture scripts, and quantization recipe will live under 
 ├── smartwatch/                # Arduino sketch — flash this
 │   ├── smartwatch.ino         # Main loop, sensor + display orchestration
 │   ├── watchface.h            # WatchState struct
-│   ├── watchface_impl.h       # Screen rendering
+│   ├── watchface_impl.h       # Screen rendering (4 screens)
 │   ├── display.h              # GC9A01 init
 │   ├── imu.h                  # LSM6DSO32 driver + pedometer
 │   ├── barometer.h            # LPS25HB driver
@@ -173,9 +201,16 @@ Training code, dataset capture scripts, and quantization recipe will live under 
 │   ├── touch.h                # CST816S driver + gesture debounce
 │   ├── ble_service.h          # BLE GATT server
 │   ├── wifi_weather.h         # Wi-Fi + Open-Meteo client
+│   ├── activity_classifier.h  # TFLM wrapper + 50 Hz IMU ring buffer
+│   ├── model_data.h           # int8 quantized model as a C array
 │   └── secrets.h              # (gitignored) Wi-Fi creds + lat/lon
 ├── tools/
-│   └── weather_push.py        # Legacy: laptop-side BLE weather pusher
+│   ├── weather_push.py        # Legacy: laptop-side BLE weather pusher
+│   └── ml/                    # Training pipeline (WISDM → TFLite → C header)
+│       ├── prepare_data.py
+│       ├── train.py
+│       ├── requirements.txt
+│       └── README.md
 ├── images/                    # README photos
 ├── stryd_firmware_context.md  # Full hardware + firmware reference
 └── OUTDATED HOPE Smart Watch Firmware/   # Pre-refactor snapshot, kept for diffing
