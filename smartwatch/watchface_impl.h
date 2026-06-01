@@ -44,7 +44,7 @@
 #define CX           (DISP_W / 2)
 #define CY           (DISP_H / 2)
 
-#define SCREEN_COUNT 3
+#define SCREEN_COUNT 4
 #define STEP_GOAL    10000UL
 
 // ── Low-level helpers ─────────────────────────────────────────
@@ -81,7 +81,7 @@ static void draw_dots(uint8_t active) {
     const int y  = 214;
     const int r  = 4;
     const int sp = 14;              // spacing between dot centres
-    const int x0 = CX - sp;        // leftmost dot
+    const int x0 = CX - sp * (SCREEN_COUNT - 1) / 2;   // leftmost dot, kept symmetric
 
     for (int i = 0; i < SCREEN_COUNT; i++) {
         int x = x0 + i * sp;
@@ -254,6 +254,30 @@ static void draw_screen2(const WatchState& ws) {
     draw_row(170, "ALTITUDE", buf, C_DIM, C_ALTITUDE);
 }
 
+// Screen 3 — Activity: predicted exercise + confidence from the on-device classifier
+static void draw_screen3(const WatchState& ws) {
+    char buf[32];
+
+    tft.fillRect(20, 58, 200, 22, C_BG);
+    draw_centered("ACTIVITY", 64, C_DIM, 2);
+
+    // Activity name, large + green
+    tft.fillRect(10, 92, 220, 38, C_BG);
+    const char* act = ws.activity[0] ? ws.activity : "--";
+    draw_centered(act, 98, C_GREEN, 3);
+
+    draw_divider(138, C_DIM);
+
+    tft.fillRect(20, 150, 200, 36, C_BG);
+    if (ws.activity[0]) {
+        snprintf(buf, sizeof(buf), "%.0f%%", ws.activityConfidence * 100.0f);
+        draw_centered(buf, 156, C_STEPS, 3);
+        draw_centered("CONFIDENCE", 184, C_DIM, 1);
+    } else {
+        draw_centered("warming up...", 162, C_DIM, 2);
+    }
+}
+
 // ─────────────────────────────────────────────────────────────
 // Public API
 // ─────────────────────────────────────────────────────────────
@@ -276,6 +300,7 @@ void watchface_switch_screen(uint8_t screen, const WatchState& ws) {
         case 0: draw_screen0(ws); break;
         case 1: draw_screen1(ws); break;
         case 2: draw_screen2(ws); break;
+        case 3: draw_screen3(ws); break;
     }
 }
 
@@ -286,5 +311,6 @@ void watchface_update(uint8_t screen, const WatchState& ws) {
         case 0: draw_screen0(ws); break;
         case 1: draw_screen1(ws); break;
         case 2: draw_screen2(ws); break;
+        case 3: draw_screen3(ws); break;
     }
 }

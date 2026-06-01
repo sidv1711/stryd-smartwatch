@@ -23,4 +23,8 @@ struct WatchState {
   // Misc
   bool     charging;
   bool     bleConnected;
+
+  // On-device HAR (filled by activity_classifier ~ every 2.5 s)
+  char     activity[16];          // e.g. "walking"
+  float    activityConfidence;    // 0.0–1.0 dequantized softmax
 };

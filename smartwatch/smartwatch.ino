@@ -32,15 +32,17 @@
 #include "watchface_impl.h"  // watchface drawing (uses tft)
 #include "touch.h"           // CST816S touch controller
 #include "wifi_weather.h"    // WiFi + Open-Meteo weather streaming
+#include "activity_classifier.h"  // On-device HAR via TFLM
 
 // ── Display object ───────────────────────────────────────────
 // One-and-only definition; headers refer to it via `extern`.
 Adafruit_GC9A01A tft(PIN_DISP_CS, PIN_DISP_DC, PIN_DISP_RST);
 
 // ── Timing ───────────────────────────────────────────────────
-#define SENSOR_INTERVAL_MS   1000
-#define DISPLAY_INTERVAL_MS  1000
-#define BLE_NOTIFY_INTERVAL  5000
+#define SENSOR_INTERVAL_MS       1000
+#define DISPLAY_INTERVAL_MS      1000
+#define BLE_NOTIFY_INTERVAL      5000
+#define IMU_SAMPLE_INTERVAL_MS   20    // 50 Hz feed to activity classifier
 
 // ── Self-Test ────────────────────────────────────────────────
 // Set to 0 in production builds to skip the boot diagnostic.
@@ -52,6 +54,7 @@ WatchState g_watch;
 unsigned long g_lastSensorRead  = 0;
 unsigned long g_lastDisplayDraw = 0;
 unsigned long g_lastBleNotify   = 0;
+unsigned long g_lastImuSample   = 0;
 
 uint8_t  g_currentScreen = 0;
 bool     g_screenChanged = true;   // force full draw on first loop
@@ -206,6 +209,9 @@ void setup() {
   // WiFi + weather streaming (non-blocking; fetches every ~10 min once connected)
   wifi_weather_init();
 
+  // On-device HAR (allocates ~100 KB tensor arena)
+  activity_classifier_init();
+
   // Boot diagnostic — runs after every subsystem is initialized so
   // it can exercise sensors and display end-to-end.
   self_test();
@@ -234,6 +240,25 @@ void loop() {
   if (g_screenChanged) {
     g_screenChanged = false;
     watchface_switch_screen(g_currentScreen, g_watch);
+  }
+
+  // ── 50 Hz IMU sampling for activity classifier ───────────
+  if (now - g_lastImuSample >= IMU_SAMPLE_INTERVAL_MS) {
+    g_lastImuSample = now;
+    imu_sample_t s;
+    if (imu_read_sample(&s)) {
+      int   act_idx;
+      float act_conf;
+      if (activity_classifier_push(s.ax, s.ay, s.az, s.gx, s.gy, s.gz,
+                                   act_idx, act_conf)) {
+        strncpy(g_watch.activity, kClassLabels[act_idx],
+                sizeof(g_watch.activity) - 1);
+        g_watch.activity[sizeof(g_watch.activity) - 1] = '\0';
+        g_watch.activityConfidence = act_conf;
+        Serial.printf("[ACT] %s (%.0f%%)\n",
+                      g_watch.activity, act_conf * 100.0f);
+      }
+    }
   }
 
   // Read sensors every 1s
