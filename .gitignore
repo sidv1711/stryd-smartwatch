@@ -1,6 +1,9 @@
 # macOS
 .DS_Store
 
+# OMC agent state
+.omc/
+
 # Local secrets (WiFi creds, lat/lon)
 smartwatch/secrets.h
 

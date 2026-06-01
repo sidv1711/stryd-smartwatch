@@ -1,7 +1,0 @@
-{
-  "tool_name": "Bash",
-  "tool_input_preview": "{\"command\":\"git add README.md smartwatch/secrets.example.h images/ && git status --short && git commit -m \\\"Add README with build/feature/bring-up/ML sections and rename images\\\" && git push\",\"descrip...",
-  "error": "Exit code 128\nfatal: pathspec 'README.md' did not match any files",
-  "timestamp": "2026-06-01T17:07:15.793Z",
-  "retry_count": 1
-}
