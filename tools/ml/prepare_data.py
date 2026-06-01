@@ -55,12 +55,19 @@ def download():
 
 
 def extract():
-    if os.path.exists(EXTRACTED):
-        print(f"[data] {EXTRACTED} already present, skipping extract")
+    if os.path.isdir(os.path.join(EXTRACTED, "raw", "watch")):
+        print(f"[data] {EXTRACTED} already extracted, skipping")
         return
-    print("[data] extracting...")
+    print("[data] extracting outer archive...")
     with zipfile.ZipFile(ZIP_PATH) as zf:
         zf.extractall(DATA_DIR)
+    # UCI ships this as a zip-of-zip: outer wrapper contains the dataset zip
+    # plus a description PDF. Extract the inner one too.
+    inner = os.path.join(DATA_DIR, "wisdm-dataset.zip")
+    if os.path.exists(inner):
+        print("[data] extracting inner dataset zip...")
+        with zipfile.ZipFile(inner) as zf:
+            zf.extractall(DATA_DIR)
 
 
 def _progress(count, block, total):
